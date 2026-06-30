@@ -3,8 +3,8 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json.Nodes;
 using HarmonyLib;
+using Microsoft.Xna.Framework.Graphics;
 using Newtonsoft.Json;
 using Sickhead.Engine.Util;
 using StardewModdingAPI;
@@ -12,50 +12,9 @@ using StardewModdingAPI.Events;
 using StardewModdingAPI.Framework;
 using StardewValley;
 using StardewValley.GameData.Objects;
+using xTile;
 
 namespace AssetPipelineTrace;
-
-public enum TraceKind
-{
-    Unknown,
-    Data,
-    Map,
-    Image,
-}
-
-public enum TraceStep
-{
-    Load,
-    Edit,
-}
-
-public interface ITraceFrame
-{
-    public TraceKind Kind { get; }
-    public TraceStep Step { get; }
-    public string? ForMod { get; set; }
-}
-
-public sealed class DataLoadTraceFrame : ITraceFrame
-{
-    public TraceKind Kind => TraceKind.Data;
-    public TraceStep Step => TraceStep.Load;
-    public string? ForMod { get; set; }
-
-    public List<string>? Init { get; set; }
-}
-
-public sealed class DataEditTraceFrame : ITraceFrame
-{
-    public TraceKind Kind => TraceKind.Data;
-    public TraceStep Step => TraceStep.Edit;
-    public string? ForMod { get; set; }
-
-    public List<string>? Add { get; set; }
-    public List<string>? Remove { get; set; }
-    public List<string>? Changed { get; set; }
-    public AssetEditPriority Priority { get; set; }
-}
 
 public sealed class ModEntry : Mod
 {
@@ -86,6 +45,7 @@ public sealed class ModEntry : Mod
 
         // ap-trace Data/Objects
         // ap-trace Data/TriggerActions
+        // ap-trace LooseSprites/Cursors
         // ap-trace mushymato.MMAP/Panorama
         help.ConsoleCommands.Add("ap-trace", "Trace content edit operations on a particular asset", ConsoleDoTrace);
         help.Events.Content.AssetReady += OnAssetReady;
@@ -184,6 +144,14 @@ public sealed class ModEntry : Mod
 
     private static TraceKind GetTraceKind(IAssetInfo asset)
     {
+        if (asset.DataType == typeof(Map))
+        {
+            return TraceKind.Map;
+        }
+        if (asset.DataType == typeof(Texture2D))
+        {
+            return TraceKind.Image;
+        }
         if (asset.DataType.IsGenericType)
         {
             Type genericDef = asset.DataType.GetGenericTypeDefinition();
@@ -208,11 +176,16 @@ public sealed class ModEntry : Mod
             return;
         if (!ShouldTrace(___AssetInfo))
             return;
-        switch (GetTraceKind(___AssetInfo))
+        TraceKind kind = GetTraceKind(___AssetInfo);
+        switch (kind)
         {
             case TraceKind.Data:
                 HandleEdit_TraceKindData(___AssetInfo, ___Mod, ref apply, priority, onBehalfOf);
-                return;
+                break;
+            case TraceKind.Map:
+            case TraceKind.Image:
+                HandleEdit_TraceKindOps(kind, ___Mod, ref apply, priority, onBehalfOf);
+                break;
         }
     }
     #endregion
@@ -276,6 +249,31 @@ public sealed class ModEntry : Mod
                     Remove = removed,
                     Changed = changed,
                     Priority = priority,
+                }
+            );
+        };
+    }
+
+    private static void HandleEdit_TraceKindOps(
+        TraceKind kind,
+        IModMetadata mod,
+        ref Action<IAssetData> apply,
+        AssetEditPriority priority,
+        string? onBehalfOf
+    )
+    {
+        Action<IAssetData> originalApply = apply;
+        apply = asset =>
+        {
+            WrappedAssetData wrappedAsset = new(asset);
+            // original
+            originalApply(wrappedAsset);
+            // original
+            tracedFrames.Add(
+                new OpsEditTraceFrame(kind)
+                {
+                    ForMod = GetForMod(mod, onBehalfOf),
+                    Operations = wrappedAsset.Operations,
                 }
             );
         };
