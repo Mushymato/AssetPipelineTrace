@@ -11,6 +11,7 @@ using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewModdingAPI.Framework;
 using StardewValley;
+using StardewValley.Extensions;
 using StardewValley.GameData.Objects;
 using xTile;
 
@@ -28,10 +29,7 @@ public sealed class ModEntry : Mod
     private static IMonitor mon = null!;
     internal static IModHelper help = null!;
     internal static Harmony harmony = new(ModId);
-    internal static IAssetName? tracedAsset = null;
-    internal static Dictionary<string, byte[]>? tracedHashes = null;
-    internal static readonly List<ITraceFrame> tracedFrames = [];
-    internal static MD5 md5 = MD5.Create();
+    internal static List<TraceContext> traceCtx = [];
 
     internal static MethodInfo originalEdit = AccessTools.DeclaredMethod(
         typeof(AssetRequestedEventArgs),
@@ -43,8 +41,14 @@ public sealed class ModEntry : Mod
         mon = Monitor;
         help = helper;
 
+        harmony.Patch(
+            original: originalEdit,
+            prefix: new HarmonyMethod(typeof(ModEntry), nameof(AssetRequestedEventArgs_Edit_Prefix))
+        );
+
         // ap-trace Data/Objects
         // ap-trace Data/TriggerActions
+        // ap-trace Data/Objects Data/TriggerActions
         // ap-trace LooseSprites/Cursors
         // ap-trace mushymato.MMAP/Panorama
         help.ConsoleCommands.Add("ap-trace", "Trace content edit operations on a particular asset", ConsoleDoTrace);
@@ -66,10 +70,11 @@ public sealed class ModEntry : Mod
         }
         Log($"Data/Objects A: {stopwatch.Elapsed}", LogLevel.Info);
         help.Events.Content.AssetReady -= OnAssetReady;
-        ActivateTrace("Data/Objects");
+        ActivateTrace(["Data/Objects"]);
         stopwatch.Restart();
         for (int i = 0; i < trials; i++)
         {
+            Log(i.ToString());
             help.GameContent.InvalidateCache(assetName);
             var _ = help.GameContent.Load<Dictionary<string, ObjectData>>(assetName);
         }
@@ -80,22 +85,28 @@ public sealed class ModEntry : Mod
 
     private void OnAssetReady(object? sender, AssetReadyEventArgs e)
     {
-        if (tracedAsset?.IsEquivalentTo(e.NameWithoutLocale) ?? false)
+        List<TraceContext> doneCtx = [];
+        foreach (TraceContext ctx in traceCtx)
         {
-            DeactivateTrace();
+            if (e.NameWithoutLocale.IsEquivalentTo(ctx.TracedAsset))
+            {
+                ctx.Deactivate();
+                doneCtx.Add(ctx);
+            }
         }
+        traceCtx.RemoveAll(doneCtx.Contains);
     }
 
     private void ConsoleDoTrace(string cmd, string[] args)
     {
-        if (!ArgUtility.TryGet(args, 0, out string? value, out string error))
+        if (args.Length < 1)
         {
-            Log(error, LogLevel.Error);
+            Log("Need at least 1 argument", LogLevel.Error);
             return;
         }
-        if (tracedAsset == null)
+        if (traceCtx.Count == 0)
         {
-            ActivateTrace(value);
+            ActivateTrace(args);
         }
         else
         {
@@ -103,66 +114,39 @@ public sealed class ModEntry : Mod
         }
     }
 
-    private static void ActivateTrace(string assetName, [CallerMemberName] string? caller = null)
+    private static void ActivateTrace(string[] args, [CallerMemberName] string? caller = null)
     {
-        tracedAsset = help.GameContent.ParseAssetName(assetName);
-        Log($"ACTIVATE({caller}) {assetName}", LogLevel.Info);
-        harmony.Patch(
-            original: originalEdit,
-            prefix: new HarmonyMethod(typeof(ModEntry), nameof(AssetRequestedEventArgs_Edit_Prefix))
-        );
-        help.GameContent.InvalidateCache(tracedAsset);
+        bool wasActive = traceCtx.Count > 0;
+        foreach (string assetName in args)
+        {
+            IAssetName tracedAsset = help.GameContent.ParseAssetName(assetName);
+            Log($"ACTIVATE({caller}) {assetName}", LogLevel.Info);
+            traceCtx.Add(new TraceContext(tracedAsset));
+        }
+        if (!wasActive && traceCtx.Count > 0)
+        {
+            foreach (IAssetName assetName in traceCtx.Select(ctx => ctx.TracedAsset).ToList())
+            {
+                help.GameContent.InvalidateCache(assetName);
+            }
+        }
     }
 
     private static void DeactivateTrace([CallerMemberName] string? caller = null)
     {
-        if (tracedAsset == null)
+        if (traceCtx.Count == 0)
         {
             Log("Not active");
+            return;
         }
-        harmony.Unpatch(originalEdit, HarmonyPatchType.Prefix);
-        string filename = string.Concat(
-            "trace-",
-            string.Join('_', tracedAsset!.Name.Split(Path.GetInvalidFileNameChars())),
-            ".json"
-        );
-        help.Data.WriteJsonFile(filename, tracedFrames);
-        Log(
-            $"DEACTIVATE({caller}) {tracedAsset}, wrote {tracedFrames.Count} frames to '{Path.Combine(help.DirectoryPath, filename)}'",
-            LogLevel.Info
-        );
-        tracedHashes = null;
-        tracedFrames.Clear();
-        tracedAsset = null;
+        foreach (TraceContext ctx in traceCtx)
+        {
+            ctx.Deactivate(caller);
+        }
+        traceCtx.Clear();
     }
 
     #region patches
-    private static bool ShouldTrace(IAssetInfo asset)
-    {
-        return tracedAsset?.IsEquivalentTo(asset.Name) ?? false;
-    }
-
-    private static TraceKind GetTraceKind(IAssetInfo asset)
-    {
-        if (asset.DataType == typeof(Map))
-        {
-            return TraceKind.Map;
-        }
-        if (asset.DataType == typeof(Texture2D))
-        {
-            return TraceKind.Image;
-        }
-        if (asset.DataType.IsGenericType)
-        {
-            Type genericDef = asset.DataType.GetGenericTypeDefinition();
-            Type[] genericArgs = asset.DataType.GetGenericArguments();
-            if (genericDef == typeof(List<>) || genericDef == typeof(Dictionary<,>) && genericArgs[0] == typeof(string))
-            {
-                return TraceKind.Data;
-            }
-        }
-        return TraceKind.Unknown;
-    }
 
     private static void AssetRequestedEventArgs_Edit_Prefix(
         IAssetInfo ___AssetInfo,
@@ -172,184 +156,14 @@ public sealed class ModEntry : Mod
         string? onBehalfOf = null
     )
     {
-        if (tracedAsset == null)
+        if (traceCtx.Count == 0)
             return;
-        if (!ShouldTrace(___AssetInfo))
-            return;
-        TraceKind kind = GetTraceKind(___AssetInfo);
-        switch (kind)
+        foreach (TraceContext ctx in traceCtx)
         {
-            case TraceKind.Data:
-                HandleEdit_TraceKindData(___AssetInfo, ___Mod, ref apply, priority, onBehalfOf);
-                break;
-            case TraceKind.Map:
-            case TraceKind.Image:
-                HandleEdit_TraceKindOps(kind, ___Mod, ref apply, priority, onBehalfOf);
-                break;
+            ctx.Handle(___AssetInfo, ___Mod, ref apply, priority, onBehalfOf);
         }
     }
     #endregion
-
-    #region edit handlers
-    private static void HandleEdit_TraceKindData(
-        IAssetInfo asset,
-        IModMetadata mod,
-        ref Action<IAssetData> apply,
-        AssetEditPriority priority,
-        string? onBehalfOf
-    )
-    {
-        MethodInfo? hashGetter = MakeHashDictGetter(asset.DataType);
-        if (hashGetter == null)
-            return;
-        Action<IAssetData> originalApply = apply;
-        apply = asset =>
-        {
-            if (tracedHashes == null)
-            {
-                tracedHashes = (Dictionary<string, byte[]>)hashGetter.Invoke(null, [asset])!;
-                tracedFrames.Add(new DataLoadTraceFrame() { ForMod = null, Init = tracedHashes.Keys.ToList() });
-            }
-            // original
-            originalApply(asset);
-            // original
-
-            List<string> added = [];
-            List<string> removed = [];
-            List<string> changed = [];
-
-            Dictionary<string, byte[]> tracedHashesAfter =
-                (Dictionary<string, byte[]>)hashGetter.Invoke(null, [asset])!;
-            foreach ((string key, byte[] hash) in tracedHashesAfter)
-            {
-                if (tracedHashes.TryGetValue(key, out byte[]? hashPrev))
-                {
-                    if (hashPrev.SequenceCompareTo(hash) != 0)
-                    {
-                        changed.Add(key);
-                    }
-                }
-                else
-                {
-                    added.Add(key);
-                }
-            }
-            foreach ((string key, byte[] hash) in tracedHashes)
-            {
-                if (!tracedHashesAfter.ContainsKey(key))
-                    removed.Add(key);
-            }
-            tracedHashes = tracedHashesAfter;
-
-            tracedFrames.Add(
-                new DataEditTraceFrame()
-                {
-                    ForMod = GetForMod(mod, onBehalfOf),
-                    Add = added,
-                    Remove = removed,
-                    Changed = changed,
-                    Priority = priority,
-                }
-            );
-        };
-    }
-
-    private static void HandleEdit_TraceKindOps(
-        TraceKind kind,
-        IModMetadata mod,
-        ref Action<IAssetData> apply,
-        AssetEditPriority priority,
-        string? onBehalfOf
-    )
-    {
-        Action<IAssetData> originalApply = apply;
-        apply = asset =>
-        {
-            WrappedAssetData wrappedAsset = new(asset);
-            // original
-            originalApply(wrappedAsset);
-            // original
-            tracedFrames.Add(
-                new OpsEditTraceFrame(kind)
-                {
-                    ForMod = GetForMod(mod, onBehalfOf),
-                    Operations = wrappedAsset.Operations,
-                }
-            );
-        };
-    }
-    #endregion
-
-    private static string GetForMod(IModMetadata mod, string? onBehalfOf)
-    {
-        return onBehalfOf != null ? $"{onBehalfOf} (via {mod.Manifest.UniqueID})" : mod.Manifest.UniqueID;
-    }
-
-    private static MethodInfo? MakeHashDictGetter(Type typ)
-    {
-        Type genericDef = typ.GetGenericTypeDefinition();
-        Type[] genericArgs = typ.GetGenericArguments();
-        if (genericDef == typeof(Dictionary<,>) && genericArgs[0] == typeof(string))
-        {
-            return typeof(ModEntry)
-                .GetMethod(nameof(CheckStringDict), BindingFlags.Static | BindingFlags.NonPublic)
-                ?.MakeGenericMethod(genericArgs[1]);
-        }
-        else if (genericDef == typeof(List<>))
-        {
-            return typeof(ModEntry)
-                .GetMethod(nameof(CheckIdList), BindingFlags.Static | BindingFlags.NonPublic)
-                ?.MakeGenericMethod(genericArgs[0]);
-        }
-        Log($"Type not supported, aborting trace", LogLevel.Error);
-        DeactivateTrace();
-        return null;
-    }
-
-    private static Dictionary<string, byte[]> CheckStringDict<TValue>(IAssetData asset)
-    {
-        IDictionary<string, TValue> data = asset.AsDictionary<string, TValue>().Data;
-        return data.ToDictionary(kv => kv.Key, kv => HashMD5(kv.Value));
-    }
-
-    private static Dictionary<string, byte[]> CheckIdList<TValue>(IAssetData asset)
-    {
-        Func<TValue, string>? getId = null;
-        if (
-            (typeof(TValue).GetProperty("Id") ?? typeof(TValue).GetProperty("ID")) is PropertyInfo propInfo
-            && propInfo.GetDataType() == typeof(string)
-        )
-        {
-            getId = propInfo.GetGetMethod()?.CreateDelegate<Func<TValue, string>>();
-        }
-        else if (
-            (typeof(TValue).GetField("Id") ?? typeof(TValue).GetField("ID")) is FieldInfo fieldInfo
-            && fieldInfo.GetDataType() == typeof(string)
-        )
-        {
-            getId = (thing) => (string)fieldInfo.GetValue(thing)!;
-        }
-        if (getId == null)
-            throw new Exception("Failed to get Id/ID prop/field");
-
-        IList<TValue> data = asset.GetData<IList<TValue>>();
-        Dictionary<string, byte[]> result = [];
-        foreach (TValue item in data)
-        {
-            result[getId(item)] = HashMD5(item);
-        }
-        return result;
-    }
-
-    /// <summary>Get a MD5 hash by the value for unique key purposes</summary>
-    /// <param name="input"></param>
-    /// <returns></returns>
-    internal static byte[] HashMD5(object? input)
-    {
-        // Use input string to calculate MD5 hash
-        byte[] inputBytes = Encoding.ASCII.GetBytes(JsonConvert.SerializeObject(input));
-        return md5.ComputeHash(inputBytes);
-    }
 
     /// <summary>SMAPI static monitor Log wrapper</summary>
     /// <param name="msg"></param>

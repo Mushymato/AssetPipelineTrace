@@ -1,3 +1,4 @@
+using Newtonsoft.Json.Linq;
 using StardewModdingAPI.Events;
 
 namespace AssetPipelineTrace;
@@ -40,7 +41,7 @@ public sealed class DataEditTraceFrame : ITraceFrame
 
     public List<string>? Add { get; set; }
     public List<string>? Remove { get; set; }
-    public List<string>? Changed { get; set; }
+    public Dictionary<string, JToken>? Changed { get; set; }
     public AssetEditPriority Priority { get; set; }
 }
 
@@ -50,4 +51,5 @@ public sealed class OpsEditTraceFrame(TraceKind kind) : ITraceFrame
     public TraceStep Step => TraceStep.Edit;
     public string? ForMod { get; set; }
     public List<string>? Operations { get; set; }
+    public AssetEditPriority Priority { get; set; }
 }
