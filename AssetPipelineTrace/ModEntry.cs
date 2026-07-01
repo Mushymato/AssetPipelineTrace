@@ -66,15 +66,15 @@ public sealed class ModEntry : Mod
                     postfix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_XY_Postfix))
                 );
             }
-            else if (paramInfo.Length == 1 && paramInfo[0].ParameterType == typeof(Location))
-            {
-                Log($"Patched Setter of {prop}");
-                harmony.Patch(
-                    original: prop.GetSetMethod(),
-                    prefix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_Location_Prefix)),
-                    postfix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_Location_Postfix))
-                );
-            }
+            // else if (paramInfo.Length == 1 && paramInfo[0].ParameterType == typeof(Location))
+            // {
+            //     Log($"Patched Setter of {prop}");
+            //     harmony.Patch(
+            //         original: prop.GetSetMethod(),
+            //         prefix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_Location_Prefix)),
+            //         postfix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_Location_Postfix))
+            //     );
+            // }
         }
 
         // ap-trace Data/Objects
@@ -386,30 +386,30 @@ public sealed class ModEntry : Mod
         CheckTileChanged(__state, newTile, ___m_layer.Id, x, y);
     }
 
-    private static void TileArray_Item_Location_Prefix(
-        TileArray __instance,
-        Layer ___m_layer,
-        ref Tile? __state,
-        Location location
-    )
-    {
-        if (NoCheckTile(___m_layer))
-            return;
-        __state = __instance[location];
-    }
+    // private static void TileArray_Item_Location_Prefix(
+    //     TileArray __instance,
+    //     Layer ___m_layer,
+    //     ref Tile? __state,
+    //     Location location
+    // )
+    // {
+    //     if (NoCheckTile(___m_layer))
+    //         return;
+    //     __state = __instance[location];
+    // }
 
-    private static void TileArray_Item_Location_Postfix(
-        TileArray __instance,
-        Layer ___m_layer,
-        ref Tile? __state,
-        Location location
-    )
-    {
-        if (NoCheckTile(___m_layer))
-            return;
-        Tile? newTile = __instance[location];
-        CheckTileChanged(__state, newTile, ___m_layer.Id, location.X, location.Y);
-    }
+    // private static void TileArray_Item_Location_Postfix(
+    //     TileArray __instance,
+    //     Layer ___m_layer,
+    //     ref Tile? __state,
+    //     Location location
+    // )
+    // {
+    //     if (NoCheckTile(___m_layer))
+    //         return;
+    //     Tile? newTile = __instance[location];
+    //     CheckTileChanged(__state, newTile, ___m_layer.Id, location.X, location.Y);
+    // }
     #endregion
 
     /// <summary>SMAPI static monitor Log wrapper</summary>
