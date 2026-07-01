@@ -1,21 +1,18 @@
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
-using System.Text;
 using HarmonyLib;
-using Microsoft.Xna.Framework.Graphics;
-using Newtonsoft.Json;
-using Sickhead.Engine.Util;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewModdingAPI.Framework;
-using StardewValley;
-using StardewValley.Extensions;
+using StardewModdingAPI.Framework.Content;
 using StardewValley.GameData.Objects;
-using xTile;
 
 namespace AssetPipelineTrace;
+
+public sealed class ModConfig
+{
+    public bool EnableChanges { get; set; } = false;
+}
 
 public sealed class ModEntry : Mod
 {
@@ -29,20 +26,17 @@ public sealed class ModEntry : Mod
     private static IMonitor mon = null!;
     internal static IModHelper help = null!;
     internal static Harmony harmony = new(ModId);
-    internal static List<TraceContext> traceCtx = [];
-
-    internal static MethodInfo originalEdit = AccessTools.DeclaredMethod(
-        typeof(AssetRequestedEventArgs),
-        nameof(AssetRequestedEventArgs.Edit)
-    );
+    internal static Dictionary<IAssetName, TraceContext> traceCtx = [];
+    internal static ModConfig config = null!;
 
     public override void Entry(IModHelper helper)
     {
         mon = Monitor;
         help = helper;
+        config = helper.ReadConfig<ModConfig>();
 
         harmony.Patch(
-            original: originalEdit,
+            original: AccessTools.DeclaredMethod(typeof(AssetRequestedEventArgs), nameof(AssetRequestedEventArgs.Edit)),
             prefix: new HarmonyMethod(typeof(ModEntry), nameof(AssetRequestedEventArgs_Edit_Prefix))
         );
 
@@ -50,8 +44,18 @@ public sealed class ModEntry : Mod
         // ap-trace Data/TriggerActions
         // ap-trace Data/Objects Data/TriggerActions
         // ap-trace LooseSprites/Cursors
+        // ap-trace LooseSprites/Cursors
         // ap-trace mushymato.MMAP/Panorama
-        help.ConsoleCommands.Add("ap-trace", "Trace content edit operations on a particular asset", ConsoleDoTrace);
+        help.ConsoleCommands.Add(
+            "ap-trace",
+            "Trace content edit operations on a list of assets, deactivate all active traces if no arg given",
+            ConsoleDoTrace
+        );
+        help.ConsoleCommands.Add(
+            "ap-toggle-changes",
+            "Enable/disable data edit changes (very slow)",
+            ConsoleToggleChanges
+        );
         help.Events.Content.AssetReady += OnAssetReady;
 
         help.ConsoleCommands.Add("ap-perf", "Test perf on trace", ConsoleTestPerf);
@@ -59,7 +63,7 @@ public sealed class ModEntry : Mod
 
     private void ConsoleTestPerf(string arg1, string[] arg2)
     {
-        const int trials = 100;
+        const int trials = 10;
         const string assetName = "Data/Objects";
         // baseline
         Stopwatch stopwatch = Stopwatch.StartNew();
@@ -85,47 +89,51 @@ public sealed class ModEntry : Mod
 
     private void OnAssetReady(object? sender, AssetReadyEventArgs e)
     {
-        List<TraceContext> doneCtx = [];
-        foreach (TraceContext ctx in traceCtx)
+        foreach (TraceContext ctx in traceCtx.Values)
         {
             if (e.NameWithoutLocale.IsEquivalentTo(ctx.TracedAsset))
             {
                 ctx.Deactivate();
-                doneCtx.Add(ctx);
             }
         }
-        traceCtx.RemoveAll(doneCtx.Contains);
     }
 
     private void ConsoleDoTrace(string cmd, string[] args)
     {
-        if (args.Length < 1)
-        {
-            Log("Need at least 1 argument", LogLevel.Error);
-            return;
-        }
-        if (traceCtx.Count == 0)
-        {
-            ActivateTrace(args);
-        }
-        else
+        if (args.Length == 0)
         {
             DeactivateTrace();
         }
+        else
+        {
+            ActivateTrace(args);
+        }
+    }
+
+    private void ConsoleToggleChanges(string arg1, string[] arg2)
+    {
+        config.EnableChanges = !config.EnableChanges;
+        Log($"EnableChanges: {config.EnableChanges}");
+        Helper.WriteConfig(config);
     }
 
     private static void ActivateTrace(string[] args, [CallerMemberName] string? caller = null)
     {
-        bool wasActive = traceCtx.Count > 0;
+        bool added = false;
         foreach (string assetName in args)
         {
             IAssetName tracedAsset = help.GameContent.ParseAssetName(assetName);
-            Log($"ACTIVATE({caller}) {assetName}", LogLevel.Info);
-            traceCtx.Add(new TraceContext(tracedAsset));
+            if (!traceCtx.TryGetValue(tracedAsset, out TraceContext? ctx))
+            {
+                ctx = new TraceContext(tracedAsset);
+                traceCtx[tracedAsset] = ctx;
+            }
+            ctx.Activate(caller);
+            added = true;
         }
-        if (!wasActive && traceCtx.Count > 0)
+        if (added)
         {
-            foreach (IAssetName assetName in traceCtx.Select(ctx => ctx.TracedAsset).ToList())
+            foreach (IAssetName assetName in traceCtx.Keys.ToList())
             {
                 help.GameContent.InvalidateCache(assetName);
             }
@@ -139,7 +147,7 @@ public sealed class ModEntry : Mod
             Log("Not active");
             return;
         }
-        foreach (TraceContext ctx in traceCtx)
+        foreach (TraceContext ctx in traceCtx.Values)
         {
             ctx.Deactivate(caller);
         }
@@ -149,8 +157,7 @@ public sealed class ModEntry : Mod
     #region patches
 
     private static void AssetRequestedEventArgs_Edit_Prefix(
-        IAssetInfo ___AssetInfo,
-        IModMetadata ___Mod,
+        AssetRequestedEventArgs __instance,
         ref Action<IAssetData> apply,
         AssetEditPriority priority = AssetEditPriority.Default,
         string? onBehalfOf = null
@@ -158,9 +165,16 @@ public sealed class ModEntry : Mod
     {
         if (traceCtx.Count == 0)
             return;
-        foreach (TraceContext ctx in traceCtx)
+        foreach (TraceContext ctx in traceCtx.Values)
         {
-            ctx.Handle(___AssetInfo, ___Mod, ref apply, priority, onBehalfOf);
+            ctx.HandleEdit(
+                __instance.AssetInfo,
+                __instance.Mod,
+                __instance.LoadOperations,
+                ref apply,
+                priority,
+                onBehalfOf
+            );
         }
     }
     #endregion

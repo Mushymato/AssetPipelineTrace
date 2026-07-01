@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
@@ -27,11 +28,33 @@ public class WrappedAssetData(IAssetData original) : IAssetData
 
     public void ReplaceWith(object value)
     {
-        Operations.Add($"{nameof(ReplaceWith)}()");
+        AddOperation();
         original.ReplaceWith(value);
     }
 
-    public List<string> Operations = [];
+    public List<(string, Rectangle?)> Operations = [];
+
+    public void AddOperation(int minWidth, int minHeight, [CallerMemberName] string? caller = null)
+    {
+        Operations.Add(($"{caller}(minWidth={minWidth},minHeight={minHeight})", null));
+    }
+
+    public void AddOperation(
+        Rectangle? sourceArea,
+        Rectangle? targetArea,
+        string patchMode,
+        [CallerMemberName] string? caller = null
+    )
+    {
+        Operations.Add(
+            ($"{caller}(sourceArea={sourceArea},targetArea={targetArea},patchMode={patchMode})", targetArea)
+        );
+    }
+
+    public void AddOperation([CallerMemberName] string? caller = null)
+    {
+        Operations.Add(($"{caller}()", null));
+    }
 }
 
 public sealed class WrappedAssetDataForImage(WrappedAssetData parent, IAssetDataForImage original) : IAssetDataForImage
@@ -48,7 +71,7 @@ public sealed class WrappedAssetDataForImage(WrappedAssetData parent, IAssetData
 
     public bool ExtendImage(int minWidth, int minHeight)
     {
-        parent.Operations.Add($"{nameof(ExtendImage)}(minWidth={minWidth},minHeight={minHeight})");
+        parent.AddOperation(minWidth, minHeight);
         return original.ExtendImage(minWidth, minHeight);
     }
 
@@ -59,9 +82,7 @@ public sealed class WrappedAssetDataForImage(WrappedAssetData parent, IAssetData
         PatchMode patchMode = PatchMode.Replace
     )
     {
-        parent.Operations.Add(
-            $"{nameof(PatchImage)}(sourceArea={sourceArea},targetArea={targetArea},patchMode={patchMode})"
-        );
+        parent.AddOperation(sourceArea, targetArea, patchMode.ToString());
         original.PatchImage(source, sourceArea, targetArea, patchMode);
     }
 
@@ -72,15 +93,13 @@ public sealed class WrappedAssetDataForImage(WrappedAssetData parent, IAssetData
         PatchMode patchMode = PatchMode.Replace
     )
     {
-        parent.Operations.Add(
-            $"{nameof(PatchImage)}(sourceArea={sourceArea},targetArea={targetArea},patchMode={patchMode})"
-        );
+        parent.AddOperation(sourceArea, targetArea, patchMode.ToString());
         original.PatchImage(source, sourceArea, targetArea, patchMode);
     }
 
     public void ReplaceWith(Texture2D value)
     {
-        parent.Operations.Add($"{nameof(ReplaceWith)}()");
+        parent.AddOperation();
         original.ReplaceWith(value);
     }
 }
@@ -99,7 +118,7 @@ public sealed class WrappedAssetDataForMap(WrappedAssetData parent, IAssetDataFo
 
     public bool ExtendMap(int minWidth = 0, int minHeight = 0)
     {
-        parent.Operations.Add($"{nameof(ExtendMap)}(minWidth={minWidth},minHeight={minHeight})");
+        parent.AddOperation(minWidth, minHeight);
         return original.ExtendMap(minWidth, minHeight);
     }
 
@@ -110,15 +129,13 @@ public sealed class WrappedAssetDataForMap(WrappedAssetData parent, IAssetDataFo
         PatchMapMode patchMode = PatchMapMode.Overlay
     )
     {
-        parent.Operations.Add(
-            $"{nameof(PatchMap)}(sourceArea={sourceArea},targetArea={targetArea},patchMode={patchMode})"
-        );
+        parent.AddOperation(sourceArea, targetArea, patchMode.ToString());
         original.PatchMap(source, sourceArea, targetArea, patchMode);
     }
 
     public void ReplaceWith(Map value)
     {
-        parent.Operations.Add($"{nameof(ReplaceWith)}()");
+        parent.AddOperation();
         original.ReplaceWith(value);
     }
 }

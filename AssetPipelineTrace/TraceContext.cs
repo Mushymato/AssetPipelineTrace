@@ -7,18 +7,32 @@ using Sickhead.Engine.Util;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewModdingAPI.Framework;
+using StardewModdingAPI.Framework.Content;
 using xTile;
 
 namespace AssetPipelineTrace;
 
 public sealed class TraceContext(IAssetName tracedAsset)
 {
-    internal Dictionary<string, JToken>? tracedJToken = null;
+    internal bool Active { get; private set; } = false;
+    internal Dictionary<string, JToken?>? tracedJToken = null;
     internal readonly List<ITraceFrame> tracedFrames = [];
     internal IAssetName TracedAsset => tracedAsset;
 
-    public string Deactivate([CallerMemberName] string? caller = null)
+    public void Activate([CallerMemberName] string? caller = null)
     {
+        if (Active)
+            return;
+        tracedJToken = null;
+        tracedFrames.Clear();
+        ModEntry.Log($"ACTIVATE({caller}) {tracedAsset}", LogLevel.Info);
+        Active = true;
+    }
+
+    public void Deactivate([CallerMemberName] string? caller = null)
+    {
+        if (!Active)
+            return;
         string filename = string.Concat(
             "trace-",
             string.Join('_', tracedAsset!.Name.Split(Path.GetInvalidFileNameChars())),
@@ -29,12 +43,12 @@ public sealed class TraceContext(IAssetName tracedAsset)
             $"DEACTIVATE({caller}) {tracedAsset}, wrote {tracedFrames.Count} frames to '{Path.Combine(ModEntry.help.DirectoryPath, filename)}'",
             LogLevel.Info
         );
-        return Path.Combine(ModEntry.help.DirectoryPath, filename);
+        Active = false;
     }
 
     private bool ShouldTrace(IAssetInfo asset)
     {
-        return tracedAsset?.IsEquivalentTo(asset.Name) ?? false;
+        return Active && (tracedAsset?.IsEquivalentTo(asset.Name) ?? false);
     }
 
     private static TraceKind GetTraceKind(IAssetInfo asset)
@@ -59,9 +73,10 @@ public sealed class TraceContext(IAssetName tracedAsset)
         return TraceKind.Unknown;
     }
 
-    public void Handle(
+    public void HandleEdit(
         IAssetInfo asset,
-        IModMetadata mod,
+        IModMetadata? mod,
+        List<AssetLoadOperation> loadOperations,
         ref Action<IAssetData> apply,
         AssetEditPriority priority = AssetEditPriority.Default,
         string? onBehalfOf = null
@@ -73,7 +88,7 @@ public sealed class TraceContext(IAssetName tracedAsset)
         switch (kind)
         {
             case TraceKind.Data:
-                HandleEdit_TraceKindData(asset, mod, ref apply, priority, onBehalfOf);
+                HandleEdit_TraceKindData(asset, mod, loadOperations, ref apply, priority, onBehalfOf);
                 break;
             case TraceKind.Map:
             case TraceKind.Image:
@@ -86,7 +101,8 @@ public sealed class TraceContext(IAssetName tracedAsset)
 
     private void HandleEdit_TraceKindData(
         IAssetInfo asset,
-        IModMetadata mod,
+        IModMetadata? mod,
+        List<AssetLoadOperation> loadOperations,
         ref Action<IAssetData> apply,
         AssetEditPriority priority,
         string? onBehalfOf
@@ -100,8 +116,18 @@ public sealed class TraceContext(IAssetName tracedAsset)
         {
             if (tracedJToken == null)
             {
-                tracedJToken = (Dictionary<string, JToken>)hashGetter.Invoke(null, [asset])!;
-                tracedFrames.Add(new DataLoadTraceFrame() { ForMod = null, Init = tracedJToken.Keys.ToList() });
+                tracedJToken = (Dictionary<string, JToken?>)hashGetter.Invoke(null, [asset])!;
+                AssetLoadOperation? loader = loadOperations.MaxBy(p => p.Priority);
+                tracedFrames.Add(
+                    new DataLoadTraceFrame()
+                    {
+                        ForMod =
+                            loader != null
+                                ? GetForMod(loader.Mod, loader.OnBehalfOf?.Manifest.UniqueID)
+                                : "StardewValley",
+                        Init = tracedJToken.Keys.ToList(),
+                    }
+                );
             }
             // original
             originalApply(asset);
@@ -111,9 +137,9 @@ public sealed class TraceContext(IAssetName tracedAsset)
             List<string> removed = [];
             Dictionary<string, JToken> changed = [];
 
-            Dictionary<string, JToken> tracedHashesAfter =
-                (Dictionary<string, JToken>)hashGetter.Invoke(null, [asset])!;
-            foreach ((string key, JToken tok) in tracedHashesAfter)
+            Dictionary<string, JToken?> tracedJTokenAfter =
+                (Dictionary<string, JToken?>)hashGetter.Invoke(null, [asset])!;
+            foreach ((string key, JToken? tok) in tracedJTokenAfter)
             {
                 if (tracedJToken.TryGetValue(key, out JToken? tokPrev))
                 {
@@ -125,12 +151,12 @@ public sealed class TraceContext(IAssetName tracedAsset)
                     added.Add(key);
                 }
             }
-            foreach ((string key, JToken hash) in tracedJToken)
+            foreach ((string key, JToken? hash) in tracedJToken)
             {
-                if (!tracedHashesAfter.ContainsKey(key))
+                if (!tracedJTokenAfter.ContainsKey(key))
                     removed.Add(key);
             }
-            tracedJToken = tracedHashesAfter;
+            tracedJToken = tracedJTokenAfter;
 
             tracedFrames.Add(
                 new DataEditTraceFrame()
@@ -138,7 +164,7 @@ public sealed class TraceContext(IAssetName tracedAsset)
                     ForMod = GetForMod(mod, onBehalfOf),
                     Add = added,
                     Remove = removed,
-                    Changed = changed,
+                    Changed = ModEntry.config.EnableChanges ? changed : null,
                     Priority = priority,
                 }
             );
@@ -147,7 +173,7 @@ public sealed class TraceContext(IAssetName tracedAsset)
 
     private void HandleEdit_TraceKindOps(
         TraceKind kind,
-        IModMetadata mod,
+        IModMetadata? mod,
         ref Action<IAssetData> apply,
         AssetEditPriority priority,
         string? onBehalfOf
@@ -161,19 +187,20 @@ public sealed class TraceContext(IAssetName tracedAsset)
             originalApply(wrappedAsset);
             // original
             tracedFrames.Add(
-                new OpsEditTraceFrame(kind)
+                new AreaEditTraceFrame(kind)
                 {
                     ForMod = GetForMod(mod, onBehalfOf),
-                    Operations = wrappedAsset.Operations,
+                    Operations = wrappedAsset.Operations.Select(value => value.Item1).ToList(),
                     Priority = priority,
                 }
             );
         };
     }
 
-    private static string GetForMod(IModMetadata mod, string? onBehalfOf)
+    private static string GetForMod(IModMetadata? mod, string? onBehalfOf)
     {
-        return onBehalfOf != null ? $"{onBehalfOf} (via {mod.Manifest.UniqueID})" : mod.Manifest.UniqueID;
+        string modId = mod?.Manifest.UniqueID ?? "UNKNOWN";
+        return onBehalfOf != null ? $"{onBehalfOf} (via {modId})" : modId;
     }
 
     private static MethodInfo? MakeHashDictGetter(Type typ)
@@ -196,10 +223,10 @@ public sealed class TraceContext(IAssetName tracedAsset)
         BindingFlags.Static | BindingFlags.NonPublic
     );
 
-    private static Dictionary<string, JToken> CheckStringDict<TValue>(IAssetData asset)
+    private static Dictionary<string, JToken?> CheckStringDict<TValue>(IAssetData asset)
     {
         IDictionary<string, TValue> data = asset.AsDictionary<string, TValue>().Data;
-        return data.ToDictionary(kv => kv.Key, kv => JToken.FromObject(kv.Value!));
+        return data.ToDictionary(kv => kv.Key, kv => MakeDiff(kv.Value));
     }
 
     private static readonly MethodInfo? CheckIdListInfo = typeof(TraceContext).GetMethod(
@@ -207,7 +234,7 @@ public sealed class TraceContext(IAssetName tracedAsset)
         BindingFlags.Static | BindingFlags.NonPublic
     );
 
-    private static Dictionary<string, JToken> CheckIdList<TValue>(IAssetData asset)
+    private static Dictionary<string, JToken?> CheckIdList<TValue>(IAssetData asset)
     {
         Func<TValue, string>? getId = null;
         if (
@@ -228,11 +255,13 @@ public sealed class TraceContext(IAssetName tracedAsset)
             throw new Exception("Failed to get Id/ID prop/field");
 
         IList<TValue> data = asset.GetData<IList<TValue>>();
-        Dictionary<string, JToken> result = [];
+        Dictionary<string, JToken?> result = [];
         foreach (TValue item in data)
         {
-            result[getId(item)] = JToken.FromObject(item!);
+            result[getId(item)] = MakeDiff(item);
         }
         return result;
     }
+
+    private static JToken? MakeDiff(object? item) => ModEntry.config.EnableChanges ? JToken.FromObject(item!) : null;
 }

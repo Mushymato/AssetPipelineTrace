@@ -45,7 +45,7 @@ public sealed class DataEditTraceFrame : ITraceFrame
     public AssetEditPriority Priority { get; set; }
 }
 
-public sealed class OpsEditTraceFrame(TraceKind kind) : ITraceFrame
+public sealed class AreaEditTraceFrame(TraceKind kind) : ITraceFrame
 {
     public TraceKind Kind => kind;
     public TraceStep Step => TraceStep.Edit;
