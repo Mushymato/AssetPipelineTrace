@@ -3,15 +3,13 @@ using System.Runtime.CompilerServices;
 using HarmonyLib;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
-using StardewModdingAPI.Framework;
-using StardewModdingAPI.Framework.Content;
 using StardewValley.GameData.Objects;
 
 namespace AssetPipelineTrace;
 
 public sealed class ModConfig
 {
-    public bool EnableChanges { get; set; } = false;
+    public bool EnableChanges { get; set; } = true;
 }
 
 public sealed class ModEntry : Mod
@@ -44,7 +42,7 @@ public sealed class ModEntry : Mod
         // ap-trace Data/TriggerActions
         // ap-trace Data/Objects Data/TriggerActions
         // ap-trace LooseSprites/Cursors
-        // ap-trace LooseSprites/Cursors
+        // ap-trace Maps/Forest
         // ap-trace mushymato.MMAP/Panorama
         help.ConsoleCommands.Add(
             "ap-trace",
@@ -159,12 +157,10 @@ public sealed class ModEntry : Mod
     private static void AssetRequestedEventArgs_Edit_Prefix(
         AssetRequestedEventArgs __instance,
         ref Action<IAssetData> apply,
-        AssetEditPriority priority = AssetEditPriority.Default,
-        string? onBehalfOf = null
+        AssetEditPriority priority,
+        string? onBehalfOf
     )
     {
-        if (traceCtx.Count == 0)
-            return;
         foreach (TraceContext ctx in traceCtx.Values)
         {
             ctx.HandleEdit(

@@ -1,3 +1,4 @@
+using Microsoft.Xna.Framework;
 using Newtonsoft.Json.Linq;
 using StardewModdingAPI.Events;
 
@@ -51,5 +52,6 @@ public sealed class AreaEditTraceFrame(TraceKind kind) : ITraceFrame
     public TraceStep Step => TraceStep.Edit;
     public string? ForMod { get; set; }
     public List<string>? Operations { get; set; }
+    public List<Rectangle> Areas { get; set; }
     public AssetEditPriority Priority { get; set; }
 }

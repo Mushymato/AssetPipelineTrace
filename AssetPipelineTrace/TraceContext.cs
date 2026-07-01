@@ -190,7 +190,8 @@ public sealed class TraceContext(IAssetName tracedAsset)
                 new AreaEditTraceFrame(kind)
                 {
                     ForMod = GetForMod(mod, onBehalfOf),
-                    Operations = wrappedAsset.Operations.Select(value => value.Item1).ToList(),
+                    Operations = wrappedAsset.Operations,
+                    Areas = wrappedAsset.Areas,
                     Priority = priority,
                 }
             );

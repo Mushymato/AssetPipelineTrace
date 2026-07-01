@@ -6,7 +6,7 @@ using xTile;
 
 namespace AssetPipelineTrace;
 
-public class WrappedAssetData(IAssetData original) : IAssetData
+public sealed class WrappedAssetData(IAssetData original) : IAssetData
 {
     public object Data => original.Data;
 
@@ -32,11 +32,12 @@ public class WrappedAssetData(IAssetData original) : IAssetData
         original.ReplaceWith(value);
     }
 
-    public List<(string, Rectangle?)> Operations = [];
+    public List<string> Operations = [];
+    public List<Rectangle> Areas = [];
 
     public void AddOperation(int minWidth, int minHeight, [CallerMemberName] string? caller = null)
     {
-        Operations.Add(($"{caller}(minWidth={minWidth},minHeight={minHeight})", null));
+        Operations.Add($"{caller}(minWidth={minWidth},minHeight={minHeight})");
     }
 
     public void AddOperation(
@@ -46,14 +47,14 @@ public class WrappedAssetData(IAssetData original) : IAssetData
         [CallerMemberName] string? caller = null
     )
     {
-        Operations.Add(
-            ($"{caller}(sourceArea={sourceArea},targetArea={targetArea},patchMode={patchMode})", targetArea)
-        );
+        Operations.Add($"{caller}(sourceArea={sourceArea},targetArea={targetArea},patchMode={patchMode})");
+        if (targetArea.HasValue)
+            Areas.Add(targetArea.Value);
     }
 
     public void AddOperation([CallerMemberName] string? caller = null)
     {
-        Operations.Add(($"{caller}()", null));
+        Operations.Add($"{caller}()");
     }
 }
 
