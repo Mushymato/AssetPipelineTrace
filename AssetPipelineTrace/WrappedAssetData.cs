@@ -33,7 +33,6 @@ public sealed class WrappedAssetData(IAssetData original) : IAssetData
     }
 
     public List<string> Operations = [];
-    public List<Rectangle> Areas = [];
 
     public void AddOperation(int minWidth, int minHeight, [CallerMemberName] string? caller = null)
     {
@@ -48,8 +47,6 @@ public sealed class WrappedAssetData(IAssetData original) : IAssetData
     )
     {
         Operations.Add($"{caller}(sourceArea={sourceArea},targetArea={targetArea},patchMode={patchMode})");
-        if (targetArea.HasValue)
-            Areas.Add(targetArea.Value);
     }
 
     public void AddOperation([CallerMemberName] string? caller = null)

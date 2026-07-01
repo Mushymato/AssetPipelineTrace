@@ -52,6 +52,13 @@ public sealed class AreaEditTraceFrame(TraceKind kind) : ITraceFrame
     public TraceStep Step => TraceStep.Edit;
     public string? ForMod { get; set; }
     public List<string>? Operations { get; set; }
-    public List<Rectangle> Areas { get; set; }
     public AssetEditPriority Priority { get; set; }
+
+    internal Dictionary<Point, string>? ChangedTilesDesc { get; set; }
+}
+
+public sealed record MapTileChange(string Layer, int X, int Y, List<string>? Props)
+{
+    public override string ToString() =>
+        $"{Layer}[{X},{Y}]" + (Props != null ? "{" + string.Join(',', Props) + "}" : string.Empty);
 }

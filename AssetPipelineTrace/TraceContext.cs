@@ -1,6 +1,8 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using Force.DeepCloner;
 using JsonDiffPatchDotNet;
+using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Newtonsoft.Json.Linq;
 using Sickhead.Engine.Util;
@@ -9,6 +11,7 @@ using StardewModdingAPI.Events;
 using StardewModdingAPI.Framework;
 using StardewModdingAPI.Framework.Content;
 using xTile;
+using xTile.ObjectModel;
 
 namespace AssetPipelineTrace;
 
@@ -164,7 +167,7 @@ public sealed class TraceContext(IAssetName tracedAsset)
                     ForMod = GetForMod(mod, onBehalfOf),
                     Add = added,
                     Remove = removed,
-                    Changed = ModEntry.config.EnableChanges ? changed : null,
+                    Changed = ModEntry.config.EnableDetailedChanges ? changed : null,
                     Priority = priority,
                 }
             );
@@ -182,17 +185,48 @@ public sealed class TraceContext(IAssetName tracedAsset)
         Action<IAssetData> originalApply = apply;
         apply = asset =>
         {
+            IPropertyCollection? oldProps = null;
+            if (ModEntry.config.EnableDetailedChanges && kind == TraceKind.Map)
+            {
+                ModEntry.ChangedMapTiles = [];
+                oldProps = asset.AsMap().Data.Properties.ShallowClone();
+            }
             WrappedAssetData wrappedAsset = new(asset);
             // original
             originalApply(wrappedAsset);
             // original
+
+            List<string> operations = wrappedAsset.Operations;
+            Dictionary<Point, string>? changedTilesDesc = null;
+            if (kind == TraceKind.Map)
+            {
+                if (ModEntry.ChangedMapTiles?.Any() ?? false)
+                {
+                    changedTilesDesc = [];
+                    foreach (MapTileChange change in ModEntry.ChangedMapTiles)
+                    {
+                        operations.Add($"TileChanged({change})");
+                        changedTilesDesc[new(change.X, change.Y)] = change.ToString();
+                    }
+                }
+                if (oldProps != null)
+                {
+                    List<string>? mapProps = ModEntry.GetChangedProps(oldProps, wrappedAsset.AsMap().Data.Properties);
+                    if (mapProps != null)
+                    {
+                        foreach (string prop in mapProps)
+                            operations.Add($"PropChanged({prop})");
+                    }
+                }
+            }
+            ModEntry.ChangedMapTiles = null;
             tracedFrames.Add(
                 new AreaEditTraceFrame(kind)
                 {
                     ForMod = GetForMod(mod, onBehalfOf),
-                    Operations = wrappedAsset.Operations,
-                    Areas = wrappedAsset.Areas,
+                    Operations = operations,
                     Priority = priority,
+                    ChangedTilesDesc = changedTilesDesc,
                 }
             );
         };
@@ -264,5 +298,6 @@ public sealed class TraceContext(IAssetName tracedAsset)
         return result;
     }
 
-    private static JToken? MakeDiff(object? item) => ModEntry.config.EnableChanges ? JToken.FromObject(item!) : null;
+    private static JToken? MakeDiff(object? item) =>
+        ModEntry.config.EnableDetailedChanges ? JToken.FromObject(item!) : null;
 }

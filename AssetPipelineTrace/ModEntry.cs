@@ -1,15 +1,23 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
+using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
+using StardewValley;
 using StardewValley.GameData.Objects;
+using xTile;
+using xTile.Dimensions;
+using xTile.Layers;
+using xTile.ObjectModel;
+using xTile.Tiles;
 
 namespace AssetPipelineTrace;
 
 public sealed class ModConfig
 {
-    public bool EnableChanges { get; set; } = true;
+    public bool EnableDetailedChanges { get; set; } = true;
 }
 
 public sealed class ModEntry : Mod
@@ -26,6 +34,8 @@ public sealed class ModEntry : Mod
     internal static Harmony harmony = new(ModId);
     internal static Dictionary<IAssetName, TraceContext> traceCtx = [];
     internal static ModConfig config = null!;
+    internal static IAssetName? TracedMap = null;
+    internal static TraceContext? TracedMapReady = null;
 
     public override void Entry(IModHelper helper)
     {
@@ -37,12 +47,41 @@ public sealed class ModEntry : Mod
             original: AccessTools.DeclaredMethod(typeof(AssetRequestedEventArgs), nameof(AssetRequestedEventArgs.Edit)),
             prefix: new HarmonyMethod(typeof(ModEntry), nameof(AssetRequestedEventArgs_Edit_Prefix))
         );
+        foreach (PropertyInfo prop in AccessTools.GetDeclaredProperties(typeof(TileArray)))
+        {
+            if (prop.PropertyType != typeof(Tile))
+                continue;
+            ParameterInfo[] paramInfo = prop.GetIndexParameters();
+            if (
+                paramInfo.Length == 2
+                && paramInfo[0].ParameterType == typeof(int)
+                && paramInfo[1].ParameterType == typeof(int)
+            )
+            {
+                Log($"Patched Setter of {prop}");
+                harmony.Patch(
+                    original: prop.GetSetMethod(),
+                    prefix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_XY_Prefix)),
+                    postfix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_XY_Postfix))
+                );
+            }
+            else if (paramInfo.Length == 1 && paramInfo[0].ParameterType == typeof(Location))
+            {
+                Log($"Patched Setter of {prop}");
+                harmony.Patch(
+                    original: prop.GetSetMethod(),
+                    prefix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_Location_Prefix)),
+                    postfix: new HarmonyMethod(typeof(ModEntry), nameof(TileArray_Item_Location_Postfix))
+                );
+            }
+        }
 
         // ap-trace Data/Objects
         // ap-trace Data/TriggerActions
         // ap-trace Data/Objects Data/TriggerActions
         // ap-trace LooseSprites/Cursors
         // ap-trace Maps/Forest
+        // ap-trace Maps/Backwoods
         // ap-trace mushymato.MMAP/Panorama
         help.ConsoleCommands.Add(
             "ap-trace",
@@ -50,11 +89,17 @@ public sealed class ModEntry : Mod
             ConsoleDoTrace
         );
         help.ConsoleCommands.Add(
-            "ap-toggle-changes",
-            "Enable/disable data edit changes (very slow)",
-            ConsoleToggleChanges
+            "ap-trace-map",
+            "Trace the current location's map and start logging mods that edits each clicked tile. Run this again to stop.",
+            ConsoleDoTraceMap
+        );
+        help.ConsoleCommands.Add(
+            "ap-toggle-details",
+            "Enable/disable detailed edit changes (is slower)",
+            ConsoleToggleDetails
         );
         help.Events.Content.AssetReady += OnAssetReady;
+        help.Events.Input.ButtonPressed += OnButtonPressed;
 
         help.ConsoleCommands.Add("ap-perf", "Test perf on trace", ConsoleTestPerf);
     }
@@ -92,6 +137,47 @@ public sealed class ModEntry : Mod
             if (e.NameWithoutLocale.IsEquivalentTo(ctx.TracedAsset))
             {
                 ctx.Deactivate();
+                if (TracedMap?.IsEquivalentTo(ctx.TracedAsset) ?? false)
+                {
+                    TracedMapReady = ctx;
+                }
+            }
+        }
+    }
+
+    /// https://github.com/Pathoschild/StardewMods/blob/76565e83ede4bc8b3c293f1c659032ba9c39c213/Common/TileHelper.cs#L123
+    /// <summary>Get the tile at the non-UI pixel coordinate relative to the top-left corner of the screen.</summary>
+    /// <param name="x">The pixel X coordinate.</param>
+    /// <param name="y">The pixel Y coordinate.</param>
+    public static Point GetTileFromScreenPosition(float x, float y)
+    {
+        float screenX = Game1.viewport.X + x / Game1.options.zoomLevel;
+        float screenY = Game1.viewport.Y + y / Game1.options.zoomLevel;
+
+        int tileX = (int)Math.Floor(screenX / Game1.tileSize);
+        int tileY = (int)Math.Floor(screenY / Game1.tileSize);
+
+        return new Point(tileX, tileY);
+    }
+
+    private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
+    {
+        if (e.Button == SButton.MouseLeft && TracedMapReady != null)
+        {
+            Point tile = GetTileFromScreenPosition(Game1.getMouseXRaw(), Game1.getMouseYRaw());
+            Log($"===== {tile} =====", LogLevel.Info);
+            foreach (ITraceFrame frame in TracedMapReady.tracedFrames)
+            {
+                if (
+                    frame is not AreaEditTraceFrame areaFrame
+                    || areaFrame.Kind != TraceKind.Map
+                    || areaFrame.ChangedTilesDesc == null
+                )
+                    continue;
+                if (areaFrame.ChangedTilesDesc.TryGetValue(tile, out string? desc))
+                {
+                    Log(desc, LogLevel.Info);
+                }
             }
         }
     }
@@ -108,14 +194,38 @@ public sealed class ModEntry : Mod
         }
     }
 
-    private void ConsoleToggleChanges(string arg1, string[] arg2)
+    private void ConsoleDoTraceMap(string cmd, string[] args)
     {
-        config.EnableChanges = !config.EnableChanges;
-        Log($"EnableChanges: {config.EnableChanges}");
+        if (!Context.IsWorldReady)
+        {
+            Log("Must load a save first", LogLevel.Error);
+            return;
+        }
+        if (TracedMap != null)
+        {
+            Log("Stopped tracing the map", LogLevel.Info);
+            DeactivateTrace();
+            TracedMap = null;
+            TracedMapReady = null;
+            return;
+        }
+        if (Game1.currentLocation.Map is not Map map || Game1.currentLocation.mapPath.Value is not string mapPath)
+        {
+            Log("Current location map is null", LogLevel.Error);
+            return;
+        }
+        DeactivateTrace();
+        ActivateTrace([mapPath], true);
+    }
+
+    private void ConsoleToggleDetails(string arg1, string[] arg2)
+    {
+        config.EnableDetailedChanges = !config.EnableDetailedChanges;
+        Log($"EnableChanges: {config.EnableDetailedChanges}");
         Helper.WriteConfig(config);
     }
 
-    private static void ActivateTrace(string[] args, [CallerMemberName] string? caller = null)
+    private static void ActivateTrace(string[] args, bool isTracedMap = false, [CallerMemberName] string? caller = null)
     {
         bool added = false;
         foreach (string assetName in args)
@@ -125,6 +235,10 @@ public sealed class ModEntry : Mod
             {
                 ctx = new TraceContext(tracedAsset);
                 traceCtx[tracedAsset] = ctx;
+            }
+            if (isTracedMap)
+            {
+                TracedMap = tracedAsset;
             }
             ctx.Activate(caller);
             added = true;
@@ -172,6 +286,96 @@ public sealed class ModEntry : Mod
                 onBehalfOf
             );
         }
+    }
+
+    internal static List<MapTileChange>? ChangedMapTiles = null;
+
+    internal static List<string>? GetChangedProps(IPropertyCollection oldProps, IPropertyCollection newProps)
+    {
+        List<string>? props = null;
+        foreach ((string key, PropertyValue value) in oldProps)
+        {
+            if (newProps.TryGetValue(key, out PropertyValue? newValue))
+            {
+                if (value != newValue)
+                {
+                    (props ??= []).Add($"'{key}'='{newValue}'");
+                }
+            }
+            else
+            {
+                (props ??= []).Add($"'{key}'=null");
+            }
+            continue;
+        }
+        foreach ((string key, PropertyValue value) in newProps)
+        {
+            if (!oldProps.ContainsKey(key))
+            {
+                (props ??= []).Add($"'{key}'='{value}'");
+            }
+        }
+        return props;
+    }
+
+    private static void CheckTileChanged(Tile? oldTile, Tile newTile, string layer, int x, int y)
+    {
+        if (oldTile == null && newTile == null)
+            return;
+        if (oldTile == null != (newTile == null))
+        {
+            ChangedMapTiles!.Add(new(layer, x, y, null));
+            return;
+        }
+        if (oldTile == null || newTile == null)
+            return;
+
+        List<string>? props = GetChangedProps(oldTile.Properties, newTile.Properties);
+        if ((oldTile.TileIndex != newTile.TileIndex) || (oldTile.TileSheet.Id != newTile.TileSheet.Id) || props != null)
+        {
+            ChangedMapTiles!.Add(new(layer, x, y, props));
+        }
+    }
+
+    private static void TileArray_Item_XY_Prefix(TileArray __instance, ref Tile? __state, int x, int y)
+    {
+        if (ChangedMapTiles == null)
+            return;
+        __state = __instance[x, y];
+    }
+
+    private static void TileArray_Item_XY_Postfix(
+        TileArray __instance,
+        Layer ___m_layer,
+        ref Tile? __state,
+        int x,
+        int y
+    )
+    {
+        if (ChangedMapTiles == null)
+            return;
+        Tile? newTile = __instance[x, y];
+        CheckTileChanged(__state, newTile, ___m_layer.Id, x, y);
+    }
+
+    private static void TileArray_Item_Location_Prefix(TileArray __instance, ref Tile? __state, Location location)
+    {
+        if (ChangedMapTiles == null)
+            return;
+        __state = __instance[location];
+    }
+
+    private static void TileArray_Item_Location_Postfix(
+        TileArray __instance,
+        Layer ___m_layer,
+        ref Tile? __state,
+        Location location
+    )
+    {
+        if (ChangedMapTiles == null)
+            return;
+        Tile? newTile = __instance[location];
+        CheckTileChanged(__state, newTile, ___m_layer.Id, location.X, location.Y);
     }
     #endregion
 
