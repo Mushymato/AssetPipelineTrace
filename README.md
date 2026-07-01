@@ -2,6 +2,14 @@
 
 Debugging tool that allows you to trace changes in assets.
 
-To use, type console command `ap-trace <assetname>`, e.g. `ap-trace Data/Objects`.
+### `ap-trace [assetName]+`
 
-You will then have to wait for the asset to be reloaded to get the results.
+Supports data (e.g. `ap-trace Data/Objects`), maps (`ap-trace Maps/Forest`), and textures (`ap-trace LooseSprites/Cursors`).
+
+This starts a trace of specified asset(s). Once you see the DEACTIVATED message you can check the results.
+
+In order to complete the trace the game must reload the target asset.
+
+### `ap-trace-map`
+
+There's also a command to trace the current location's map `ap-trace-map`.

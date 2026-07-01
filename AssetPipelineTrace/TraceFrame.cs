@@ -46,6 +46,13 @@ public sealed class DataEditTraceFrame : ITraceFrame
     public AssetEditPriority Priority { get; set; }
 }
 
+public sealed class AreaLoadTraceFrame(TraceKind kind) : ITraceFrame
+{
+    public TraceKind Kind => kind;
+    public TraceStep Step => TraceStep.Load;
+    public string? ForMod { get; set; }
+}
+
 public sealed class AreaEditTraceFrame(TraceKind kind) : ITraceFrame
 {
     public TraceKind Kind => kind;

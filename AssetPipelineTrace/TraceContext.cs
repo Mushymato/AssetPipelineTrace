@@ -95,7 +95,7 @@ public sealed class TraceContext(IAssetName tracedAsset)
                 break;
             case TraceKind.Map:
             case TraceKind.Image:
-                HandleEdit_TraceKindOps(kind, mod, ref apply, priority, onBehalfOf);
+                HandleEdit_TraceKindOps(kind, mod, loadOperations, ref apply, priority, onBehalfOf);
                 break;
         }
     }
@@ -177,6 +177,7 @@ public sealed class TraceContext(IAssetName tracedAsset)
     private void HandleEdit_TraceKindOps(
         TraceKind kind,
         IModMetadata? mod,
+        List<AssetLoadOperation> loadOperations,
         ref Action<IAssetData> apply,
         AssetEditPriority priority,
         string? onBehalfOf
@@ -185,6 +186,20 @@ public sealed class TraceContext(IAssetName tracedAsset)
         Action<IAssetData> originalApply = apply;
         apply = asset =>
         {
+            if (tracedFrames.Count == 0)
+            {
+                AssetLoadOperation? loader = loadOperations.MaxBy(p => p.Priority);
+                tracedFrames.Add(
+                    new AreaLoadTraceFrame(kind)
+                    {
+                        ForMod =
+                            loader != null
+                                ? GetForMod(loader.Mod, loader.OnBehalfOf?.Manifest.UniqueID)
+                                : "StardewValley",
+                    }
+                );
+            }
+
             IPropertyCollection? oldProps = null;
             if (ModEntry.config.EnableDetailedChanges && kind == TraceKind.Map)
             {

@@ -99,7 +99,7 @@ public sealed class ModEntry : Mod
             ConsoleToggleDetails
         );
         help.Events.Content.AssetReady += OnAssetReady;
-        help.Events.Input.ButtonPressed += OnButtonPressed;
+        help.Events.Input.CursorMoved += OnCursorMoved;
 
         help.ConsoleCommands.Add("ap-perf", "Test perf on trace", ConsoleTestPerf);
     }
@@ -160,9 +160,9 @@ public sealed class ModEntry : Mod
         return new Point(tileX, tileY);
     }
 
-    private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
+    private void OnCursorMoved(object? sender, CursorMovedEventArgs e)
     {
-        if (e.Button == SButton.MouseLeft && TracedMapReady != null)
+        if (TracedMapReady != null)
         {
             Point tile = GetTileFromScreenPosition(Game1.getMouseXRaw(), Game1.getMouseYRaw());
             Log($"===== {tile} =====", LogLevel.Info);
