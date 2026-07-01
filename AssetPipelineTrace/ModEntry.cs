@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using HarmonyLib;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
@@ -160,12 +161,28 @@ public sealed class ModEntry : Mod
         return new Point(tileX, tileY);
     }
 
+    private Point prevPoint = Point.Zero;
+
     private void OnCursorMoved(object? sender, CursorMovedEventArgs e)
     {
         if (TracedMapReady != null)
         {
+            if (
+                Game1.currentLocation == null
+                || !TracedMapReady.TracedAsset.IsEquivalentTo(Game1.currentLocation.mapPath.Value)
+            )
+            {
+                Log("Stopped tracing the map", LogLevel.Info);
+                TracedMap = null;
+                TracedMapReady = null;
+                return;
+            }
             Point tile = GetTileFromScreenPosition(Game1.getMouseXRaw(), Game1.getMouseYRaw());
-            Log($"===== {tile} =====", LogLevel.Info);
+            if (prevPoint == tile)
+                return;
+            prevPoint = tile;
+            Log($"===== {tile} =====", LogLevel.Debug);
+
             foreach (ITraceFrame frame in TracedMapReady.tracedFrames)
             {
                 if (
@@ -176,7 +193,7 @@ public sealed class ModEntry : Mod
                     continue;
                 if (areaFrame.ChangedTilesDesc.TryGetValue(tile, out string? desc))
                 {
-                    Log(desc, LogLevel.Info);
+                    Log(string.Concat(desc, " - ", areaFrame.ForMod), LogLevel.Info);
                 }
             }
         }
@@ -204,7 +221,6 @@ public sealed class ModEntry : Mod
         if (TracedMap != null)
         {
             Log("Stopped tracing the map", LogLevel.Info);
-            DeactivateTrace();
             TracedMap = null;
             TracedMapReady = null;
             return;
@@ -288,6 +304,7 @@ public sealed class ModEntry : Mod
         }
     }
 
+    internal static Map? ChangingMap = null;
     internal static List<MapTileChange>? ChangedMapTiles = null;
 
     internal static List<string>? GetChangedProps(IPropertyCollection oldProps, IPropertyCollection newProps)
@@ -337,9 +354,20 @@ public sealed class ModEntry : Mod
         }
     }
 
-    private static void TileArray_Item_XY_Prefix(TileArray __instance, ref Tile? __state, int x, int y)
+    private static bool NoCheckTile(Layer ___m_layer)
     {
-        if (ChangedMapTiles == null)
+        return ChangingMap == null || ChangedMapTiles == null || ___m_layer.Map != ChangingMap;
+    }
+
+    private static void TileArray_Item_XY_Prefix(
+        TileArray __instance,
+        Layer ___m_layer,
+        ref Tile? __state,
+        int x,
+        int y
+    )
+    {
+        if (NoCheckTile(___m_layer))
             return;
         __state = __instance[x, y];
     }
@@ -352,15 +380,20 @@ public sealed class ModEntry : Mod
         int y
     )
     {
-        if (ChangedMapTiles == null)
+        if (NoCheckTile(___m_layer))
             return;
         Tile? newTile = __instance[x, y];
         CheckTileChanged(__state, newTile, ___m_layer.Id, x, y);
     }
 
-    private static void TileArray_Item_Location_Prefix(TileArray __instance, ref Tile? __state, Location location)
+    private static void TileArray_Item_Location_Prefix(
+        TileArray __instance,
+        Layer ___m_layer,
+        ref Tile? __state,
+        Location location
+    )
     {
-        if (ChangedMapTiles == null)
+        if (NoCheckTile(___m_layer))
             return;
         __state = __instance[location];
     }
@@ -372,7 +405,7 @@ public sealed class ModEntry : Mod
         Location location
     )
     {
-        if (ChangedMapTiles == null)
+        if (NoCheckTile(___m_layer))
             return;
         Tile? newTile = __instance[location];
         CheckTileChanged(__state, newTile, ___m_layer.Id, location.X, location.Y);

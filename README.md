@@ -12,4 +12,5 @@ In order to complete the trace the game must reload the target asset.
 
 ### `ap-trace-map`
 
-There's also a command to trace the current location's map `ap-trace-map`.
+This command traces the current location's map, and then begin logging what mod added the tile directly under your mouse.
+Run this again or move to another location to stop.

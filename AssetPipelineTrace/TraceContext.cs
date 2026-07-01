@@ -203,8 +203,9 @@ public sealed class TraceContext(IAssetName tracedAsset)
             IPropertyCollection? oldProps = null;
             if (ModEntry.config.EnableDetailedChanges && kind == TraceKind.Map)
             {
+                ModEntry.ChangingMap = asset.AsMap().Data;
                 ModEntry.ChangedMapTiles = [];
-                oldProps = asset.AsMap().Data.Properties.ShallowClone();
+                oldProps = ModEntry.ChangingMap.Properties.ShallowClone();
             }
             WrappedAssetData wrappedAsset = new(asset);
             // original
@@ -234,6 +235,7 @@ public sealed class TraceContext(IAssetName tracedAsset)
                     }
                 }
             }
+            ModEntry.ChangingMap = null;
             ModEntry.ChangedMapTiles = null;
             tracedFrames.Add(
                 new AreaEditTraceFrame(kind)
